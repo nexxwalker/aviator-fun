@@ -2,10 +2,14 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,29 +26,92 @@ type service struct {
 	client *redis.Client
 }
 
-var (
-	redisAddr     = getEnv("REDIS_URL", "localhost:6379")
-	redisPassword = getEnv("REDIS_PASSWORD", "")
-	redisDB       = getEnvAsInt("REDIS_DB", 0)
-	cacheInstance *service
-)
+type redisConfig struct {
+	addr     string
+	password string
+	db       int
+	tls      bool
+}
+
+var cacheInstance *service
+
+func loadRedisConfig() (redisConfig, error) {
+	value := strings.TrimSpace(os.Getenv("REDIS_URL"))
+	if value == "" {
+		if strings.EqualFold(getEnv("APP_ENV", "development"), "production") {
+			return redisConfig{}, fmt.Errorf("REDIS_URL is required when APP_ENV=production")
+		}
+		value = "localhost:6379"
+	}
+
+	if !strings.Contains(value, "://") {
+		if _, _, err := net.SplitHostPort(value); err != nil {
+			return redisConfig{}, fmt.Errorf("invalid REDIS_URL host:port: %w", err)
+		}
+		return redisConfig{
+			addr:     value,
+			password: os.Getenv("REDIS_PASSWORD"),
+			db:       getEnvAsInt("REDIS_DB", 0),
+		}, nil
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "redis" && parsed.Scheme != "rediss") || parsed.Host == "" {
+		return redisConfig{}, fmt.Errorf("invalid REDIS_URL: expected redis:// or rediss:// URL")
+	}
+
+	db := getEnvAsInt("REDIS_DB", 0)
+	if parsed.Path != "" && parsed.Path != "/" {
+		if _, err := fmt.Sscanf(strings.TrimPrefix(parsed.Path, "/"), "%d", &db); err != nil || db < 0 {
+			return redisConfig{}, fmt.Errorf("invalid Redis database in REDIS_URL")
+		}
+	}
+
+	password := os.Getenv("REDIS_PASSWORD")
+	if parsed.User != nil {
+		if parsed.User.Username() != "" && parsed.User.Username() != "default" {
+			return redisConfig{}, fmt.Errorf("Redis URL must use the default user")
+		}
+		if parsedPassword, ok := parsed.User.Password(); ok {
+			password = parsedPassword
+		}
+	}
+
+	return redisConfig{
+		addr:     parsed.Host,
+		password: password,
+		db:       db,
+		tls:      parsed.Scheme == "rediss",
+	}, nil
+}
 
 func New() Service {
 	if cacheInstance != nil {
 		return cacheInstance
 	}
 
-	client := redis.NewClient(&redis.Options{
-		Addr:         redisAddr,
-		Password:     redisPassword,
-		DB:           redisDB,
+	config, err := loadRedisConfig()
+	if err != nil {
+		log.Printf("[CACHE] Redis configuration error: %v", err)
+		return nil
+	}
+
+	options := &redis.Options{
+		Addr:         config.addr,
+		Password:     config.password,
+		DB:           config.db,
 		PoolSize:     100,
 		MinIdleConns: 10,
 		MaxRetries:   3,
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
-	})
+	}
+	if config.tls {
+		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+
+	client := redis.NewClient(options)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
