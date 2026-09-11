@@ -111,6 +111,73 @@ func TestNew_NoRedis(t *testing.T) {
 	}
 }
 
+func TestLoadRedisConfigHostPort(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("REDIS_URL", "localhost:6379")
+	t.Setenv("REDIS_PASSWORD", "local-secret")
+	t.Setenv("REDIS_DB", "2")
+
+	config, err := loadRedisConfig()
+	if err != nil {
+		t.Fatalf("loadRedisConfig() error = %v", err)
+	}
+	if config.addr != "localhost:6379" || config.password != "local-secret" || config.db != 2 || config.tls {
+		t.Fatalf("unexpected config: %+v", config)
+	}
+}
+
+func TestLoadRedisConfigURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "redis://default:url-secret@redis.example.com:6379/4")
+	t.Setenv("REDIS_PASSWORD", "ignored-secret")
+	t.Setenv("REDIS_DB", "1")
+
+	config, err := loadRedisConfig()
+	if err != nil {
+		t.Fatalf("loadRedisConfig() error = %v", err)
+	}
+	if config.addr != "redis.example.com:6379" || config.password != "url-secret" || config.db != 4 || config.tls {
+		t.Fatalf("unexpected config: %+v", config)
+	}
+}
+
+func TestLoadRedisConfigRediss(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "rediss://default:tls-secret@redis.example.com:6380")
+	t.Setenv("REDIS_PASSWORD", "")
+	t.Setenv("REDIS_DB", "0")
+
+	config, err := loadRedisConfig()
+	if err != nil {
+		t.Fatalf("loadRedisConfig() error = %v", err)
+	}
+	if !config.tls || config.addr != "redis.example.com:6380" || config.password != "tls-secret" {
+		t.Fatalf("unexpected config: %+v", config)
+	}
+}
+
+func TestLoadRedisConfigProductionRequiresURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "")
+
+	if _, err := loadRedisConfig(); err == nil {
+		t.Fatal("loadRedisConfig() expected an error when REDIS_URL is missing in production")
+	}
+}
+
+func TestLoadRedisConfigDevelopmentFallback(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("REDIS_URL", "")
+
+	config, err := loadRedisConfig()
+	if err != nil {
+		t.Fatalf("loadRedisConfig() error = %v", err)
+	}
+	if config.addr != "localhost:6379" {
+		t.Fatalf("addr = %q, want localhost:6379", config.addr)
+	}
+}
+
 func TestService_Interface(t *testing.T) {
 	// Verify that service implements Service interface
 	var _ Service = (*service)(nil)
