@@ -39,6 +39,16 @@ func gracefulShutdown(fiberServer *server.FiberServer, done chan bool) {
 	done <- true
 }
 
+func serverPort() int {
+	const defaultPort = 3000
+
+	port, err := strconv.Atoi(os.Getenv("PORT"))
+	if err != nil || port < 1 || port > 65535 {
+		return defaultPort
+	}
+	return port
+}
+
 func main() {
 
 	server := server.New()
@@ -49,7 +59,7 @@ func main() {
 	done := make(chan bool, 1)
 
 	go func() {
-		port, _ := strconv.Atoi(os.Getenv("PORT"))
+		port := serverPort()
 		err := server.Listen(fmt.Sprintf(":%d", port))
 		if err != nil {
 			panic(fmt.Sprintf("http server error: %s", err))
