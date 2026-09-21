@@ -22,6 +22,13 @@ func getApp() *server.FiberServer {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"service":"aviator","status":"online"}`)
+		return
+	}
+
 	response, err := getApp().Test(r, -1)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
